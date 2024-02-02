@@ -1,4 +1,5 @@
 from flask import Flask, request, Response, send_file, send_from_directory
+from werkzeug.datastructures.headers import Headers
 from logging.config import dictConfig
 from urllib.parse import unquote
 from typing import Union, Tuple, List
@@ -11,6 +12,7 @@ BUCKETS_DIR = '/buckets'
 ALL_PWD = pwd.getpwall()
 
 app = Flask(__name__)
+
 dictConfig({
     'version': 1,
     'formatters': {'default': {
@@ -28,19 +30,19 @@ dictConfig({
 })
 
 
-def get_user_by_uid(uid: int):
+def get_user_by_uid(uid: int) -> str:
     for user in ALL_PWD:
         if user.pw_uid == uid:
             return user.pw_name
     return 'unknown'
 
 
-def handle_get_bucket_versioning(bucket: str):
+def handle_get_bucket_versioning(bucket: str) -> Response:
     _ = bucket
     return Response(response='Not implemented', status=501)
 
 
-def dir_entry_to_xml_content(dir_entry: os.DirEntry):
+def dir_entry_to_xml_content(dir_entry: os.DirEntry) -> str:
     objects_xml = '''<Contents><Key>{key}</Key><LastModified>{mtime}</LastModified>
     <ETag>{etag}</ETag><Size>{size}</Size><StorageClass>STANDARD</StorageClass>
     <Owner><ID>{id}</ID><DisplayName>{user}</DisplayName></Owner>\
@@ -189,8 +191,31 @@ def handle_put_object(bucket: str, obj: str) -> Response:
         return Response(response='Internal Server Error', status=500)
 
 
+@app.route('/<bucket>/<obj>', methods=['HEAD'])
+def handle_head_object(bucket: str, obj: str) -> Response:
+    path = '%s/%s/%s' % (BUCKETS_DIR, bucket, obj)
+
+    stat = os.stat(path)
+
+    response = Response()
+    response.headers.add('Content-Length', stat.st_size)
+    response.headers.add('ETag', hashlib.md5(obj.encode('utf-8')).hexdigest())
+    response.headers.add('Last-Modified', datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    response.response = ''
+    response.status = 200
+    return response
+
+
+@app.route('/<bucket>/<obj>', methods=['GET'])
+def handle_get_object(bucket: str, obj: str) -> Response:
+    return send_from_directory(app.config['UPLOAD_FOLDER'], '%s/%s' % (bucket, obj),
+                                etag=hashlib.md5(obj.encode('utf-8')).hexdigest()
+                                )
+
+
+@app.route('/')
 @app.route('/<bucket>/<path:path>')
-def dispatcher(bucket: str, path: str) -> Response:
+def dispatcher(bucket: str = '', path: str = '') -> Response:
     """ Generic handler of not implemented requests.
 
     Keyword arguments:
@@ -203,4 +228,5 @@ def dispatcher(bucket: str, path: str) -> Response:
 
 
 if __name__ == "__main__":
+    app.config['UPLOAD_FOLDER'] = BUCKETS_DIR
     app.run(host='0.0.0.0', debug=True, port=8080)
